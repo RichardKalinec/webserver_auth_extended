@@ -1,0 +1,24 @@
+<?php
+
+/**
+ * @file
+ * Install file for Webserver Auth.
+ */
+
+/**
+ * Implements hook_uninstall().
+ */
+function webserver_auth_uninstall() {
+  variable_del('webserver_auth_create_user');
+  variable_del('webserver_auth_email_domain');
+  variable_del('webserver_auth_match_existing');
+  variable_del('webserver_auth_strip_prefix');
+  variable_del('webserver_auth_strip_domain');
+  variable_del('webserver_auth_disallow_pw_change');
+  variable_del('webserver_auth_disallow_username_change');
+  variable_del('webserver_auth_login_url');
+  variable_del('webserver_auth_logout_url');
+  variable_del('webserver_auth_insert');
+  variable_del('webserver_auth_add_all_new');
+  variable_del('webserver_auth_skip_check');
+}
