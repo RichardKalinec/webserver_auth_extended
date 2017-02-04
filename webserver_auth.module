@@ -167,12 +167,6 @@ function _webserver_auth_route() {
     return;
   }
 
-  // Check if we should create accounts for unknown users
-  if (! variable_get('webserver_auth_create_user', FALSE)) {
-    watchdog('webserver_auth', 'user @authname does not exist in the database or is not included in the authmap table for webserver_auth, and the create user option is disabled.', array('@authname' => $authname));
-    return;
-  }
-
   // First check if just authmap is missing
   $account = user_load_by_name($authname);
   if ($account) {
@@ -197,6 +191,12 @@ function _webserver_auth_route() {
     if (! _webserver_auth_attempt_login($authname)) {
       watchdog('webserver_auth', 'user @authname blocked.', array('@authname' => $authname), WATCHDOG_INFO);
     }
+    return;
+  }
+  
+  // Check if we should create accounts for unknown users
+  if (! variable_get('webserver_auth_create_user', FALSE)) {
+    watchdog('webserver_auth', 'user @authname does not exist in the database or is not included in the authmap table for webserver_auth, and the create user option is disabled.', array('@authname' => $authname));
     return;
   }
 
