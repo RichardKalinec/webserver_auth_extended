@@ -21,4 +21,5 @@ function webserver_auth_uninstall() {
   variable_del('webserver_auth_insert');
   variable_del('webserver_auth_add_all_new');
   variable_del('webserver_auth_skip_check');
+  variable_del('webserver_auth_logout_empty_remote_user');
 }

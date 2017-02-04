@@ -133,8 +133,11 @@ function _webserver_auth_route() {
     drupal_alter('webserver_auth_authname', $authname);
   }
 
-  if (! $authname) {
-    // Empty authname is anonymous: close any current session.
+  /* Empty authname is anonymous: if configured so, close any current session. This is FALSE by default,
+     as it may ultimately prevent mod_auth_gssapi authentication from working, or at least it makes it
+     practically impossible to configure it only for a login page, what effectively means a requirement
+     for HTTP Negotiate at every request. */
+  if (variable_get('webserver_auth_logout_empty_remote_user', FALSE) && ! $authname) {
     if (user_is_logged_in()) {
       _webserver_auth_logout();
     }
@@ -142,13 +145,16 @@ function _webserver_auth_route() {
     return;
   }
 
-  /* Check if the authname matches the current session.
-     If it does, we're done. */
+  /* Check if the authname matches the current session. If it does, we're done.
+     Empty authname here means that the module is not configured to logout the user
+     in this case, and therefore we're done. However, in the case it is nonempty
+     and different from the current session, we want to log the current user out
+     and attempt to log in the user represented by the new authname. */
   if (user_is_logged_in()) {
 
     /* Validate session authname.  We don't match against uid as authmap may
        link to a user with uid different than authname. */
-    if (isset($_SESSION['webserver_authname'])
+    if (! $authname || isset($_SESSION['webserver_authname'])
 	&& ($_SESSION['webserver_authname'] == $authname)) {
       return;
     }
@@ -397,6 +403,13 @@ function _webserver_auth_settings($form, &$form_state) {
       '#title' => t('Skip authorisation table check'),
       '#default_value' => variable_get('webserver_auth_skip_check', FALSE),
       '#description' => t("Skips the authorisation check, allowing users to login even if they were not created though this module.  Not recommended if you use multiple authentication methods."),
+    ),
+    'webserver_auth_logout_empty_remote_user' => array(
+      '#type' => 'checkbox',
+      '#title' => t('Logout the current user if the authname is empty'),
+      '#default_value' => variable_get('webserver_auth_logout_empty_remote_user', FALSE),
+      '#description' => t("Logout the current user if the remote user name retrieved from the environment variables is empty. This must be disabled for mod_auth_gssapi to work."
+    . "  Enable if you are not going to use mod_auth_gssapi, but other authentication methods supported by this module."),
     ),
   );
   return system_settings_form($form);
