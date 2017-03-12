@@ -9,6 +9,7 @@
  * Implements hook_uninstall().
  */
 function webserver_auth_uninstall() {
+  /* Delete module's configuration variables */
   variable_del('webserver_auth_create_user');
   variable_del('webserver_auth_email_domain');
   variable_del('webserver_auth_match_existing');
@@ -22,4 +23,23 @@ function webserver_auth_uninstall() {
   variable_del('webserver_auth_add_all_new');
   variable_del('webserver_auth_skip_check');
   variable_del('webserver_auth_logout_empty_remote_user');
+  variable_del('webserver_auth_optional_external_auth');
+  
+  /* Revert user/* tasks to their default state: */
+  /* Enable register and password tasks */
+  $items['user/register']['access callback'] = 'user_register_access';
+  $items['user/password']['access callback'] = TRUE;
+  /* Redirect user page if anonymous */
+  $items['user']['page callback'] = 'user_page';
+  /* Return standard login/logout to default state */
+  unset($items['user/login']['page callback']);
+  $items['user/login']['type'] = MENU_DEFAULT_LOCAL_TASK;
+  unset($items['user/login']['menu_name']);
+  $items['user/login']['access callback'] = 'user_is_anonymous';
+  $items['user/logout']['page callback'] = 'user_logout';
+  $items['user/logout']['access callback'] = 'user_is_logged_in';
+  
+  /* Re-enable login form in case it has been disabled */
+  $blocks['user']['login']['status'] = 1;
+  $blocks['user']['login']['region'] = 'sidebar_first';
 }
