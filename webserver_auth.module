@@ -411,6 +411,14 @@ function _webserver_auth_settings($form, &$form_state) {
       '#description' => t("Logout the current user if the remote user name retrieved from the environment variables is empty. This must be disabled for mod_auth_gssapi to work."
     . "  Enable if you are not going to use mod_auth_gssapi, but other authentication methods supported by this module."),
     ),
+    'webserver_auth_optional_external_auth' => array(
+      '#type' => 'checkbox',
+      '#title' => t('Preserve the ability to log in using local username + password and login form'),
+      '#default_value' => variable_get('webserver_auth_optional_external_auth', FALSE),
+      '#description' => t("With this option disabled (default), users will be able to log in only by using one of supported external authentication methods and the login form will be disabled."
+    . " When this option is enabled, the login form is re-enabled, users can log in also by using their username and password and external authentication happens after clicking on 'Log in externally'"
+    . " button. IMPORTANT: in order to this setting having real effect, webserver_auth_login_url must be nonempty!"),
+    ),
   );
   return system_settings_form($form);
 }
@@ -474,8 +482,15 @@ function webserver_auth_webserver_auth_authname_alter(&$username) {
   * Implements hook_block_info_alter().
   */
 function webserver_auth_block_info_alter(&$blocks, $theme, $code_blocks) {
-  // Disable the login block.
-  $blocks['user']['login']['status'] = 0;
+  if(!variable_get('webserver_auth_optional_external_auth', FALSE)) {
+    // Disable the login block.
+    $blocks['user']['login']['status'] = 0;
+  }
+  else {
+    // Enable the login block and specify default region for it.
+    $blocks['user']['login']['status'] = 1;
+    $blocks['user']['login']['region'] = 'sidebar_first';
+  }
 }
 
 /**
@@ -544,18 +559,47 @@ function _webserver_auth_logout_page() {
   * Implements hook_menu_alter().
   */
 function webserver_auth_menu_alter(&$items) {
-  /* Disable register and password tasks */
-  $items['user/register']['access callback'] = FALSE;
-  $items['user/password']['access callback'] = FALSE;
-  /* Redirect user page if anonymous */
-  $items['user']['page callback'] = '_webserver_auth_user_page';
-  /* Customize login/logout */
-  $items['user/login']['page callback'] = '_webserver_auth_login_page';
-  $items['user/login']['type'] = MENU_NORMAL_ITEM;
-  $items['user/login']['menu_name'] = 'user-menu';
-  $items['user/login']['access callback'] = '_webserver_auth_login_access';
-  $items['user/logout']['page callback'] = '_webserver_auth_logout_page';
-  $items['user/logout']['access callback'] = '_webserver_auth_logout_access';
+  /* If external auth is configured as mandatory: */
+  if(!variable_get('webserver_auth_optional_external_auth', FALSE)) {
+    /* Disable register and password tasks */
+    $items['user/register']['access callback'] = FALSE;
+    $items['user/password']['access callback'] = FALSE;
+    /* Redirect user page if anonymous */
+    $items['user']['page callback'] = '_webserver_auth_user_page';
+    /* Customize login/logout */
+    $items['user/login']['page callback'] = '_webserver_auth_login_page';
+    $items['user/login']['type'] = MENU_NORMAL_ITEM;
+    $items['user/login']['menu_name'] = 'user-menu';
+    $items['user/login']['access callback'] = '_webserver_auth_login_access';
+    $items['user/logout']['page callback'] = '_webserver_auth_logout_page';
+    $items['user/logout']['access callback'] = '_webserver_auth_logout_access';
+  }
+  /* If external auth is configured as optional: */
+  else {
+    /* Enable register and password tasks */
+    $items['user/register']['access callback'] = 'user_register_access';
+    $items['user/password']['access callback'] = TRUE;
+    /* Redirect user page if anonymous */
+    $items['user']['page callback'] = 'user_page';
+    /* Return standard login/logout to default state */
+    unset($items['user/login']['page callback']);
+    $items['user/login']['type'] = MENU_DEFAULT_LOCAL_TASK;
+    unset($items['user/login']['menu_name']);
+    $items['user/login']['access callback'] = 'user_is_anonymous';
+    $items['user/logout']['page callback'] = 'user_logout';
+    $items['user/logout']['access callback'] = 'user_is_logged_in';
+    /* Create new links for external login/logout */
+    $items['user/external_login']['title'] = 'Log in externally';
+    $items['user/external_login']['page callback'] = '_webserver_auth_login_page';
+    $items['user/external_login']['type'] = MENU_NORMAL_ITEM;
+    $items['user/external_login']['menu_name'] = 'user-menu';
+    $items['user/external_login']['access callback'] = '_webserver_auth_login_access';
+    $items['user/external_logout']['title'] = 'Log out externally';
+    $items['user/external_logout']['page callback'] = '_webserver_auth_logout_page';
+    $items['user/external_logout']['access callback'] = '_webserver_auth_logout_access';
+    $items['user/external_logout']['weight'] = 5;
+    $items['user/external_logout']['menu_name'] = 'user-menu';
+  }
 }
 
 /**
@@ -564,7 +608,14 @@ function webserver_auth_menu_alter(&$items) {
 function webserver_auth_menu_link_alter(&$link) {
   // Force the Login link to appear on the top-level of 'user-menu' menu by
   // default (i.e., unless it has been customized).
-  if ($link['link_path'] == 'user/login' && $link['module'] == 'system' && empty($link['customized'])) {
-    $link['plid'] = 0;
+  if(!variable_get('webserver_auth_optional_external_auth', FALSE)) {
+    if ($link['link_path'] == 'user/login' && $link['module'] == 'system' && empty($link['customized'])) {
+      $link['plid'] = 0;
+    }
+  }
+  else {
+    if ($link['link_path'] == 'user/external_login' && $link['module'] == 'system' && empty($link['customized'])) {
+      $link['plid'] = 0;
+    }
   }
 }
