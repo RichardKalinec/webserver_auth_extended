@@ -9,6 +9,7 @@
  * Implements hook_uninstall().
  */
 function webserver_auth_uninstall() {
+  /* Delete module's configuration variables */
   variable_del('webserver_auth_create_user');
   variable_del('webserver_auth_email_domain');
   variable_del('webserver_auth_match_existing');
@@ -22,4 +23,15 @@ function webserver_auth_uninstall() {
   variable_del('webserver_auth_add_all_new');
   variable_del('webserver_auth_skip_check');
   variable_del('webserver_auth_logout_empty_remote_user');
+  variable_del('webserver_auth_optional_external_auth');
+  
+  /* Re-enable login form as it may have been disabled */
+  $query = db_update('block')
+    ->fields(array(
+      'status' => 1,
+      'region' => 'sidebar_first',
+    ))
+    ->condition('module', 'user', '=')
+    ->condition('delta', 'login', '=')
+    ->execute();
 }
