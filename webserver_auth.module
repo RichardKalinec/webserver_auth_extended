@@ -277,10 +277,143 @@ function _webserver_auth_attempt_login($preparedauthname) {
   user_login_submit(array(), $form_state);
   // Save authname in session to compare in webserver_auth_route()
   $_SESSION['webserver_authname'] = $preparedauthname;
+  
+  _webserver_auth_update_remote_user_info($uid);
+  
   return TRUE;
 }
 
-/*
+/**
+ * Retrieves the information about the remote user (e-mail and/or, using the
+ * _webserver_auth_update_remote_user_roles() function, group membership
+ * information) and if it has changed from the state in the Drupal's database,
+ * it updates it in the database.
+ * 
+ * @param $uid
+ *   UID of the remote user that has just been authenticated and for which the
+ *   information is being retrieved.
+ */
+function _webserver_auth_update_remote_user_info($uid) {
+  if (variable_get('webserver_auth_email_from_idp', FALSE)) {
+    if (isset($_SERVER['REMOTE_USER_EMAIL'])) {
+      // If the user's email in REMOTE_USER_EMAIL has changed, update it in the database
+      $query = db_select('users', 'u')
+        ->groupBy('u.uid')
+        ->fields('u', array('mail'))
+        ->condition('u.uid', $uid, '=');
+      $result = $query->execute();
+      $mail = $result->fetchField();
+      
+      if ($_SERVER['REMOTE_USER_EMAIL'] != $mail) {
+        $query = db_update('users')
+          ->fields(array(
+            'mail' => $_SERVER['REMOTE_USER_EMAIL'],
+          ))
+          ->condition('uid', $uid, '=')
+          ->execute();
+      }
+    }
+  }
+  
+  /* If mapping of external groups to roles is set, retrieve group membership
+     information from REMOTE_USER_GROUP_* and update it in the database */
+  if (variable_get('webserver_auth_ext_groups_roles_map', '') != '') {
+    _webserver_auth_update_remote_user_roles($uid);
+  }
+}
+
+/**
+ * Retrieves and parses the remote user's group membership information, checks
+ * if some roles have been newly assigned/unasigned to the user using the
+ * webserver_auth_ext_groups_roles_map mapping, and if so, assigns/unassigns
+ * the corresponding roles to the user in the database.
+ *
+ * @param $uid
+ *   UID of the remote user that has just been authenticated and for which the
+ *   information is being retrieved.
+ */
+function _webserver_auth_update_remote_user_roles($uid) {
+  // divide the string from webserver_auth_ext_groups_roles_map to pairs
+  $pairs = explode(';', variable_get('webserver_auth_ext_groups_roles_map', ''));
+  // remove potential duplicate entries
+  $pairs = array_unique($pairs);
+  $map_ext_groups = array();
+  $map_roles = array();
+  // process pairs into an associative array
+  foreach ($pairs as $pair) {
+    $components = explode(':', $pair);
+    $map_ext_groups[] = $components[0];
+    $map_roles[] = $components[1];
+  }
+  
+  // load the roles that are currently assigned to the user in the database
+  $query = db_select('users_roles', 'ur')
+    ->condition('ur.uid', $uid, '=')
+    ->fields('r', array('name'));
+  $query->join('role', 'r', 'ur.rid = r.rid');
+  $result = $query->execute();
+  $roles_db = $result->fetchCol('name');
+  
+  // make a list of the roles externally assigned to the user
+  $num_groups = isset($_SERVER['REMOTE_USER_GROUP_N']) ? $_SERVER['REMOTE_USER_GROUP_N'] : 0;
+  $roles_remote = array();
+  // for every external group...
+  for ($i = 1; $i <= $num_groups; $i++) {
+    // search for matching externals groups in the mapping and retrieve roles that they are mapped to
+    $matches_ext_groups = array_intersect($map_ext_groups, array($_SERVER["REMOTE_USER_GROUP_$i"]));
+    $matches_roles = array_intersect_key($map_roles, $matches_ext_groups);
+    
+    // for each role mapped by the matching entries...
+    foreach ($matches_roles as $match_role) {
+      // verify whether the role exists in Drupal
+      $result = db_select('role', 'r')
+        ->fields('r', array('name'))
+        ->condition('r.name', $match_role, '=')
+        ->execute();
+      if ($result->fetchField() != $match_role) {
+        continue;
+      }
+      
+      // add the role to an array, if it is not already there
+      if (!in_array($match_role, $roles_remote)) {
+        $roles_remote[] = $match_role;
+      }
+    }
+  }
+    
+  /* if some roles are in the database, but are not assigned to the user anymore,
+     delete the records assigning them to the user in the database */
+  $roles_to_delete = array_diff($roles_db, $roles_remote);
+  foreach ($roles_to_delete as $role) {
+    $result = db_select('role', 'r')
+      ->fields('r', array('rid'))
+      ->condition('r.name', $role, '=')
+      ->execute();
+    $role_rid = $result->fetchField();
+    $query = db_delete('users_roles')
+      ->condition('rid', $role_rid, '=')
+      ->execute();
+  }
+  
+  /* if some roles assined to the user, but there is not a corresponding record
+     in the database, add that record */
+  $roles_to_add = array_diff($roles_remote, $roles_db);
+  foreach ($roles_to_add as $role) {
+    $result = db_select('role', 'r')
+      ->fields('r', array('rid'))
+      ->condition('r.name', $role, '=')
+      ->execute();
+    $role_rid = $result->fetchField();
+    $query = db_insert('users_roles')
+      ->fields(array(
+        'uid' => $uid,
+        'rid' => $role_rid,
+      ))
+      ->execute();
+  }
+}
+
+/**
 * Implements hook_user_presave()
 */
 function webserver_auth_user_presave(&$edit, $account, $category) {
@@ -419,6 +552,22 @@ function _webserver_auth_settings($form, &$form_state) {
     . " When this option is enabled, the login form is re-enabled, users can log in also by using their username and password and external authentication happens after clicking on 'Log in externally'"
     . " button. IMPORTANT: in order to this setting having real effect, webserver_auth_login_url must be nonempty!"),
     ),
+    'webserver_auth_email_from_idp' => array(
+      '#type' => 'checkbox',
+      '#title' => t('Retrieve users\' email from REMOTE_USER_EMAIL variable'),
+      '#default_value' => variable_get('webserver_auth_email_from_idp', FALSE),
+      '#description' => t("Retrieve users' email from REMOTE_USER_EMAIL variables at account creation and modification and update it at every login. Disable the ability to set it manually"
+    . " in the account modification form."),
+    ),
+    'webserver_auth_ext_groups_roles_map' => array(
+      '#type' => 'textarea',
+      '#title' => t('External groups to site\'s roles mapping'),
+      '#default_value' => variable_get('webserver_auth_ext_groups_roles_map', ''),
+      '#description' => t("Using this mapping, groups retrieved from REMOTE_USER_GROUP_* are mapped to site's roles. Pairs in the format external_group:role will be separated by semicolons. The group"
+    . " membership information is then updated from current REMOTE_USER_GROUP_* values at every login of any user. If this variable is empty, it means that retrieving of external groups is disabled"
+    . " and users' groups will be managed locally. CAUTION: If you set this mapping, the user will be unassigned from all roles that will not be assigned to the user by REMOTE_USER_GROUP_* variables"
+    . " and defined by this mapping."),
+    ),
   );
   return system_settings_form($form);
 }
@@ -460,6 +609,13 @@ function webserver_auth_form_user_profile_form_alter(&$form, &$form_state, $form
     unset($form['account']['current_pass_required_values']);
     $form['#validate'] = array_diff($form['#validate'], array('user_validate_current_pass'));
   }
+  
+  /* If e-mail is retrieved and updated from an external identity provider,
+     we don't want to let users modify it manually */
+  if (variable_get('webserver_auth_email_from_idp', FALSE)) {
+    $form['account']['mail']['#disabled'] = TRUE;
+    $form['account']['mail']['#description'] = t('This value has been set by default from the external identity provider and cannot be changed.');
+  }
 }
 
 /**
@@ -482,7 +638,7 @@ function webserver_auth_webserver_auth_authname_alter(&$username) {
   * Implements hook_block_info_alter().
   */
 function webserver_auth_block_info_alter(&$blocks, $theme, $code_blocks) {
-  if(!variable_get('webserver_auth_optional_external_auth', FALSE)) {
+  if (!variable_get('webserver_auth_optional_external_auth', FALSE)) {
     // Disable the login block.
     $blocks['user']['login']['status'] = 0;
   }
@@ -560,7 +716,7 @@ function _webserver_auth_logout_page() {
   */
 function webserver_auth_menu_alter(&$items) {
   /* If external auth is configured as mandatory: */
-  if(!variable_get('webserver_auth_optional_external_auth', FALSE)) {
+  if (!variable_get('webserver_auth_optional_external_auth', FALSE)) {
     /* Disable register and password tasks */
     $items['user/register']['access callback'] = FALSE;
     $items['user/password']['access callback'] = FALSE;
@@ -596,7 +752,7 @@ function webserver_auth_menu_alter(&$items) {
 function webserver_auth_menu_link_alter(&$link) {
   // Force the Login link to appear on the top-level of 'user-menu' menu by
   // default (i.e., unless it has been customized).
-  if(!variable_get('webserver_auth_optional_external_auth', FALSE)) {
+  if (!variable_get('webserver_auth_optional_external_auth', FALSE)) {
     if ($link['link_path'] == 'user/login' && $link['module'] == 'system' && empty($link['customized'])) {
       $link['plid'] = 0;
     }
